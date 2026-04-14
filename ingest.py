@@ -6,7 +6,7 @@ Pipeline:
   3. ffmpeg to extract one keyframe per chunk interval
   4. GPT-4o vision to caption each frame
   5. Merge transcript segments with visual captions per chunk
-  6. sentence-transformers to embed merged captions
+  6. OpenAI text-embedding-3-small to embed merged captions
   7. Milvus to store embeddings + metadata
 """
 
@@ -196,6 +196,7 @@ def ingest_video(
     video_path: str,
     chunk_sec: int = CHUNK_SEC,
     vlm_prompt: str = "Describe all visible objects, people, actions and events in detail.",
+    platform: str = "unknown",
 ) -> str:
     """
     Ingest a video file into Milvus.
@@ -231,8 +232,7 @@ def ingest_video(
             print(f"[ingest] Whisper failed ({e}), continuing without transcript")
             segments = []
 
-        # Connect to Milvus and ensure collection
-        connections.connect(uri=MILVUS_URI)
+        # Ensure collection exists (connection already established by caller)
         col = ensure_collection()
 
         # Process each chunk
@@ -293,6 +293,40 @@ def ingest_video(
         col.flush()
 
     print(f"\n[ingest] Done. Inserted {n_chunks} chunks for file_id={file_id}")
+
+    # Build full transcript from all chunks
+    full_transcript = " ".join(
+        t for t in records["transcript"] if t.strip()
+    )
+
+    # Generate summary, detect niche/topic, embed, store in video_summaries
+    from summarize import summarize_video, detect_niche_topic
+    from db import insert_summary
+
+    print("[ingest] Generating summary...")
+    summary = summarize_video(file_id)
+
+    print("[ingest] Detecting niche and topic...")
+    niche, topic = detect_niche_topic(summary)
+    print(f"[ingest] niche={niche!r}  topic={topic!r}")
+
+    print("[ingest] Embedding summary...")
+    summary_embedding = client.embeddings.create(
+        model=EMBED_MODEL, input=summary
+    ).data[0].embedding
+
+    insert_summary(
+        file_id=file_id,
+        file_path=video_path,
+        full_transcript=full_transcript,
+        summary=summary,
+        summary_embedding=summary_embedding,
+        platform=platform,
+        niche=niche,
+        topic=topic,
+    )
+    print(f"[ingest] Summary stored in video_summaries for file_id={file_id}")
+
     return file_id
 
 

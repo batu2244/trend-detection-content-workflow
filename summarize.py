@@ -10,8 +10,7 @@ from pymilvus import connections, Collection
 
 load_dotenv()
 
-MILVUS_HOST     = "localhost"
-MILVUS_PORT     = 19530
+MILVUS_URI      = "./milvus_local.db"
 COLLECTION_NAME = "video_captions"
 LLM_MODEL       = "gpt-4o-mini"
 
@@ -19,7 +18,7 @@ client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 def connect_milvus():
-    connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
+    connections.connect(uri=MILVUS_URI)
 
 
 def fetch_captions(file_id: str) -> list[dict]:
@@ -68,6 +67,34 @@ Be specific about what happens, when, and who is involved."""
         temperature=0.3,
     )
     return resp.choices[0].message.content.strip()
+
+
+def detect_niche_topic(summary: str) -> tuple[str, str]:
+    """
+    Ask GPT-4o-mini to infer the niche and specific topic from a video summary.
+    Returns (niche, topic) e.g. ("cooking", "sourdough bread recipe").
+    """
+    import json as _json
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Analyze this video summary and return a JSON object with exactly two keys:\n"
+                '- "niche": the broad content category (e.g. "cooking", "fitness", "finance", "tech", "beauty", "travel")\n'
+                '- "topic": the specific subject (e.g. "sourdough bread recipe", "home workout for beginners")\n\n'
+                f"Summary: {summary}\n\n"
+                "Return only valid JSON, nothing else."
+            ),
+        }],
+        max_tokens=100,
+        temperature=0,
+    )
+    try:
+        data = _json.loads(resp.choices[0].message.content.strip())
+        return data.get("niche", "unknown"), data.get("topic", "unknown")
+    except Exception:
+        return "unknown", "unknown"
 
 
 if __name__ == "__main__":
